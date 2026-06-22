@@ -1,5 +1,5 @@
 flask
 gunicorn
-pymysql
 openai
 python-dotenv
+psycopg2-binary

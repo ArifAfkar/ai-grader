@@ -4,7 +4,7 @@ import json
 import datetime
 
 from openai import OpenAI
-import pymysql
+import psycopg2
 
 
 # =======================================================
@@ -27,6 +27,19 @@ SCORE_MAP = {
 
 
 # =======================================================
+# DATABASE CONNECTION
+# =======================================================
+def get_db():
+    return psycopg2.connect(
+        host=os.getenv("DB_HOST"),
+        user=os.getenv("DB_USER"),
+        password=os.getenv("DB_PASS"),
+        dbname=os.getenv("DB_NAME"),
+        port=os.getenv("DB_PORT")
+    )
+
+
+# =======================================================
 # UTILITY FUNCTIONS
 # =======================================================
 
@@ -36,7 +49,6 @@ def normalize_category(text):
 
     if text in SCORE_MAP:
         return text
-
     return "salah"
 
 
@@ -118,10 +130,7 @@ def build_rubric_based_table_report(table_config, table_answer):
 
         lines.append(f"- Sel {key}: {value if value else '(kosong)'}")
 
-    return f"""
-Tabel jawaban siswa:
-{chr(10).join(lines)}
-"""
+    return f"Tabel jawaban siswa:\n" + "\n".join(lines)
 
 
 def ask_ai(prompt, system_message):
@@ -141,7 +150,6 @@ def ask_ai(prompt, system_message):
 # =======================================================
 
 def grade_reasoned_multiple_choice(row):
-    answer_id = row["answer_id"]
     user_answer = (row["answer_text"] or "").strip()
     question_text = row["question"] or ""
     answer_key = row["answer_key_text"] or ""
@@ -229,65 +237,61 @@ Jawab hanya satu kata.
 
 
 # =======================================================
-# MAIN FUNCTION (RENDER ENTRY POINT)
+# MAIN FUNCTION
 # =======================================================
 
 def run_grading(student_id, quiz_id):
 
-    db = pymysql.connect(
-        host=os.getenv("DB_HOST"),
-        user=os.getenv("DB_USER"),
-        password=os.getenv("DB_PASS"),
-        database=os.getenv("DB_NAME"),
-        charset="utf8mb4",
-        cursorclass=pymysql.cursors.DictCursor
-    )
+    db = get_db()
 
     try:
-        with db.cursor() as cursor:
+        cursor = db.cursor()
+
+        cursor.execute("""
+            SELECT
+                a.id AS answer_id,
+                a.answer_text,
+                a.is_right,
+                q.question_type,
+                q.question,
+                q.answer_key_text,
+                q.rubric_text,
+                q.answer_table_config
+            FROM answers a
+            INNER JOIN questions q
+                ON a.question_id = q.id
+            LEFT JOIN answer_evaluations ae
+                ON ae.answer_id = a.id
+            WHERE a.student_id = %s
+            AND a.quiz_id = %s
+            AND q.question_type IN ('essay', 'reasoned_multiple_choice')
+            AND ae.id IS NULL
+        """, (student_id, quiz_id))
+
+        answers = cursor.fetchall()
+
+        for row in answers:
+
+            if row["question_type"] == "reasoned_multiple_choice":
+                category, score, ref = grade_reasoned_multiple_choice(row)
+            else:
+                category, score, ref = grade_essay(row)
 
             cursor.execute("""
-                SELECT
-                    a.id AS answer_id,
-                    a.answer_text,
-                    a.is_right,
-                    q.question_type,
-                    q.question,
-                    q.answer_key_text,
-                    q.rubric_text,
-                    q.answer_table_config
-                FROM answers a
-                INNER JOIN questions q
-                    ON a.question_id = q.id
-                LEFT JOIN answer_evaluations ae
-                    ON ae.answer_id = a.id
-                WHERE a.student_id = %s
-                AND a.quiz_id = %s
-                AND q.question_type IN ('essay', 'reasoned_multiple_choice')
-                AND ae.id IS NULL
-            """, (student_id, quiz_id))
+                INSERT INTO answer_evaluations
+                (answer_id, category, score, rubric_reference, created_at)
+                VALUES (%s, %s, %s, %s, NOW())
+            """, (
+                row["answer_id"],
+                category.capitalize(),
+                score,
+                ref
+            ))
 
-            answers = cursor.fetchall()
+        db.commit()
 
-            for row in answers:
-
-                if row["question_type"] == "reasoned_multiple_choice":
-                    category, score, ref = grade_reasoned_multiple_choice(row)
-                else:
-                    category, score, ref = grade_essay(row)
-
-                cursor.execute("""
-                    INSERT INTO answer_evaluations
-                    (answer_id, category, score, rubric_reference, created_at)
-                    VALUES (%s, %s, %s, %s, NOW())
-                """, (
-                    row["answer_id"],
-                    category.capitalize(),
-                    score,
-                    ref
-                ))
-
-            db.commit()
+        cursor.close()
+        db.close()
 
         return {
             "status": "success",
@@ -300,6 +304,3 @@ def run_grading(student_id, quiz_id):
             "status": "error",
             "message": str(e)
         }
-
-    finally:
-        db.close()
