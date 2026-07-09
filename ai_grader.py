@@ -19,7 +19,7 @@ client = OpenAI(
 # =======================================================
 # CONSTANT
 # =======================================================
-SCORE_MAP = {
+ESSAY_SCORE_MAP = {
     "benar": 3,
     "cukup": 2,
     "kurang": 1,
@@ -48,10 +48,15 @@ def normalize_category(text):
     text = (text or "").strip().lower()
     text = re.sub(r"[^a-zA-Z]", "", text)
 
-    if text in SCORE_MAP:
+    if text in (
+        "benar",
+        "cukup",
+        "kurang",
+        "salah"
+    ):
         return text
-    return "salah"
 
+    return "salah"
 
 def format_rubric_text(rubric_text):
     rubric_text = (rubric_text or "").strip()
@@ -151,14 +156,24 @@ def ask_ai(prompt, system_message):
 # =======================================================
 
 def grade_reasoned_multiple_choice(row):
+
     user_answer = (row["answer_text"] or "").strip()
     question_text = row["question"] or ""
     answer_key = row["answer_key_text"] or ""
 
     rubric_reference = answer_key if answer_key else None
 
+    # ---------------------------------------------------
+    # Pilihan ganda salah
+    # Skor langsung 0
+    # ---------------------------------------------------
+
     if int(row.get("is_right") or 0) != 1:
         return "salah", 0, rubric_reference
+
+    # ---------------------------------------------------
+    # Pilihan benar tetapi alasan kosong
+    # ---------------------------------------------------
 
     if user_answer == "":
         return "salah", 1, rubric_reference
@@ -173,21 +188,48 @@ Kunci alasan:
 Alasan siswa:
 {user_answer}
 
-Kategori:
-- Benar
-- Kurang
-- Salah
+Nilailah kualitas alasan siswa berdasarkan kunci.
 
-Jawab hanya satu kata.
+Kategori:
+
+- Benar
+  Alasan sesuai konsep dan lengkap.
+
+- Kurang
+  Konsep utama sudah benar tetapi kurang lengkap atau kurang tepat.
+
+- Salah
+  Konsep keliru atau tidak sesuai.
+
+Jawab HANYA SATU KATA:
+
+Benar
+Kurang
+Salah
 """
 
     try:
-        raw = ask_ai(prompt, "Evaluator jawaban pilihan ganda beralasan.")
+
+        raw = ask_ai(
+            prompt,
+            "Evaluator jawaban pilihan ganda beralasan."
+        )
+
         category = normalize_category(raw)
 
-        return category, SCORE_MAP[category], rubric_reference
+        if category == "benar":
+            score = 3
+
+        elif category == "kurang":
+            score = 2
+
+        else:
+            score = 1
+
+        return category, score, rubric_reference
 
     except Exception:
+
         return "salah", 1, rubric_reference
 
 
@@ -231,7 +273,7 @@ Jawab hanya satu kata.
         raw = ask_ai(prompt, "Evaluator jawaban esai.")
         category = normalize_category(raw)
 
-        return category, SCORE_MAP[category], rubric_text
+        return category, ESSAY_SCORE_MAP[category], rubric_text
 
     except Exception:
         return "salah", 0, rubric_text
@@ -277,10 +319,6 @@ def run_grading(student_id, quiz_id):
         """, (student_id, quiz_id))
 
         answers = cursor.fetchall()
-
-        print("Student :", student_id)
-        print("Quiz    :", quiz_id)
-        print("Jumlah  :", len(answers))
 
         for row in answers:
 
