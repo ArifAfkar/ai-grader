@@ -5,6 +5,7 @@ import datetime
 
 from openai import OpenAI
 import psycopg2
+from psycopg2.extras import RealDictCursor
 
 
 # =======================================================
@@ -243,9 +244,13 @@ Jawab hanya satu kata.
 def run_grading(student_id, quiz_id):
 
     db = get_db()
+    cursor = None
 
     try:
-        cursor = db.cursor()
+
+        cursor = db.cursor(
+            cursor_factory=RealDictCursor
+        )
 
         cursor.execute("""
             SELECT
@@ -264,7 +269,10 @@ def run_grading(student_id, quiz_id):
                 ON ae.answer_id = a.id
             WHERE a.student_id = %s
             AND a.quiz_id = %s
-            AND q.question_type IN ('essay', 'reasoned_multiple_choice')
+            AND q.question_type IN (
+                'essay',
+                'reasoned_multiple_choice'
+            )
             AND ae.id IS NULL
         """, (student_id, quiz_id))
 
@@ -279,8 +287,21 @@ def run_grading(student_id, quiz_id):
 
             cursor.execute("""
                 INSERT INTO answer_evaluations
-                (answer_id, category, score, rubric_reference, created_at)
-                VALUES (%s, %s, %s, %s, NOW())
+                (
+                    answer_id,
+                    category,
+                    score,
+                    rubric_reference,
+                    created_at
+                )
+                VALUES
+                (
+                    %s,
+                    %s,
+                    %s,
+                    %s,
+                    NOW()
+                )
             """, (
                 row["answer_id"],
                 category.capitalize(),
@@ -290,17 +311,23 @@ def run_grading(student_id, quiz_id):
 
         db.commit()
 
-        cursor.close()
-        db.close()
-
         return {
             "status": "success",
             "graded": len(answers)
         }
 
     except Exception as e:
+
         db.rollback()
+
         return {
             "status": "error",
             "message": str(e)
         }
+
+    finally:
+
+        if cursor:
+            cursor.close()
+
+        db.close()
