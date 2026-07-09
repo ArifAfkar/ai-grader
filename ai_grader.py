@@ -279,8 +279,8 @@ def run_grading(student_id, quiz_id):
         answers = cursor.fetchall()
 
         print("Student :", student_id)
-print("Quiz    :", quiz_id)
-print("Jumlah  :", len(answers))
+        print("Quiz    :", quiz_id)
+        print("Jumlah  :", len(answers))
 
         for row in answers:
 
