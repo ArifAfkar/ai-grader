@@ -351,92 +351,93 @@ def run_grading(student_id, quiz_id):
                 ref
             ))
 
-            # =======================================================
-            # RECALCULATE FINAL SCORE
-            # =======================================================
+        # =======================================================
+        # RECALCULATE FINAL SCORE
+        # =======================================================
 
-            cursor.execute("""
-                SELECT
-                    a.id,
-                    a.is_right,
-                    q.question_type,
-                    q.points,
-                    ae.score AS ai_score
-                FROM answers a
-                INNER JOIN questions q
-                    ON q.id = a.question_id
-                LEFT JOIN answer_evaluations ae
-                    ON ae.answer_id = a.id
-                WHERE
-                    a.student_id = %s
-                    AND a.quiz_id = %s
-            """, (student_id, quiz_id))
+        cursor.execute("""
+            SELECT
+                a.id,
+                a.is_right,
+                q.question_type,
+                q.points,
+                ae.score AS ai_score
+            FROM answers a
+            INNER JOIN questions q
+                ON q.id = a.question_id
+            LEFT JOIN answer_evaluations ae
+                ON ae.answer_id = a.id
+            WHERE
+                a.student_id = %s
+                AND a.quiz_id = %s
+        """, (student_id, quiz_id))
 
-            rows = cursor.fetchall()
+        rows = cursor.fetchall()
 
-            total_score = 0.0
-            max_score = 0.0
+        total_score = 0.0
+        max_score = 0.0
 
-            for row in rows:
+        for row in rows:
 
-                question_type = (
-                    row["question_type"] or ""
-                ).lower()
+            question_type = (
+                row["question_type"] or ""
+            ).lower()
 
-                points = float(
-                    row["points"] or 0
+            points = float(
+                row["points"] or 0
+            )
+
+            if question_type == "likert":
+                continue
+
+            max_score += points
+
+            if question_type in (
+                "essay",
+                "reasoned_multiple_choice"
+            ):
+
+                ai_score = float(
+                    row["ai_score"] or 0
                 )
 
-                if question_type == "likert":
-                    continue
+                # Konversi skor AI (0-3) menjadi poin soal
+                total_score += (
+                    ai_score / 3.0
+                ) * points
 
-                max_score += points
+            else:
 
-                # Essay & Reasoned MC
-                if question_type in (
-                    "essay",
-                    "reasoned_multiple_choice"
-                ):
+                if int(row["is_right"] or 0) == 1:
+                    total_score += points
 
-                    ai_score = float(
-                        row["ai_score"] or 0
-                    )
+        # =======================================================
+        # UPDATE HISTORY
+        # =======================================================
 
-                    total_score += (
-                        ai_score / 3
-                    ) * points
+        cursor.execute("""
+            SELECT id
+            FROM quiz_student_list
+            WHERE
+                student_id = %s
+                AND quiz_id = %s
+            LIMIT 1
+        """, (student_id, quiz_id))
 
-                # Multiple Choice & Short Answer
-                else:
+        quiz_student = cursor.fetchone()
 
-                    if int(
-                        row["is_right"] or 0
-                    ) == 1:
-
-                        total_score += points
+        if quiz_student:
 
             cursor.execute("""
                 UPDATE history
                 SET
                     final_score = %s,
                     max_score = %s
-                WHERE quiz_student_id = (
-
-                    SELECT id
-                    FROM quiz_student_list
-                    WHERE
-                        student_id = %s
-                        AND quiz_id = %s
-                    LIMIT 1
-
-                )
+                WHERE quiz_student_id = %s
             """, (
-
                 total_score,
                 max_score,
-                student_id,
-                quiz_id
-
+                quiz_student["id"]
             ))
 
         db.commit()
