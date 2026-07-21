@@ -351,11 +351,101 @@ def run_grading(student_id, quiz_id):
                 ref
             ))
 
+            # =======================================================
+            # RECALCULATE FINAL SCORE
+            # =======================================================
+
+            cursor.execute("""
+                SELECT
+                    a.id,
+                    a.is_right,
+                    q.question_type,
+                    q.points,
+                    ae.score AS ai_score
+                FROM answers a
+                INNER JOIN questions q
+                    ON q.id = a.question_id
+                LEFT JOIN answer_evaluations ae
+                    ON ae.answer_id = a.id
+                WHERE
+                    a.student_id = %s
+                    AND a.quiz_id = %s
+            """, (student_id, quiz_id))
+
+            rows = cursor.fetchall()
+
+            total_score = 0.0
+            max_score = 0.0
+
+            for row in rows:
+
+                question_type = (
+                    row["question_type"] or ""
+                ).lower()
+
+                points = float(
+                    row["points"] or 0
+                )
+
+                if question_type == "likert":
+                    continue
+
+                max_score += points
+
+                # Essay & Reasoned MC
+                if question_type in (
+                    "essay",
+                    "reasoned_multiple_choice"
+                ):
+
+                    ai_score = float(
+                        row["ai_score"] or 0
+                    )
+
+                    total_score += (
+                        ai_score / 3
+                    ) * points
+
+                # Multiple Choice & Short Answer
+                else:
+
+                    if int(
+                        row["is_right"] or 0
+                    ) == 1:
+
+                        total_score += points
+
+            cursor.execute("""
+                UPDATE history
+                SET
+                    final_score = %s,
+                    max_score = %s
+                WHERE quiz_student_id = (
+
+                    SELECT id
+                    FROM quiz_student_list
+                    WHERE
+                        student_id = %s
+                        AND quiz_id = %s
+                    LIMIT 1
+
+                )
+            """, (
+
+                total_score,
+                max_score,
+                student_id,
+                quiz_id
+
+            ))
+
         db.commit()
 
         return {
             "status": "success",
-            "graded": len(answers)
+            "graded": len(answers),
+            "final_score": total_score,
+            "max_score": max_score
         }
 
     except Exception as e:
